@@ -1,7 +1,7 @@
 from torch import nn
 from tqdm import tqdm
 from db.mnist import MNIST
-from models.gan import GAN_VAE, GAN
+from models.gan import GAN
 import torch
 from torchvision.utils import save_image
 import os
