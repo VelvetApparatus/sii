@@ -48,23 +48,24 @@ class GAN_VAE(nn.Module):
 
 
 class GAN(nn.Module):
-    def __init__(self, input_dim, hidden_dim, latent_dim):
+    def __init__(self, input_dim, hidden_dim):
         super(GAN, self).__init__()
         self.generator = nn.Sequential(
             nn.Linear(128, 1024),
-            nn.LeakyReLU(0.2),
+            nn.LeakyReLU(),
+            nn.Dropout(0.2),
             nn.Linear(1024, 2048),
-            nn.LeakyReLU(0.2),
+            nn.LeakyReLU(),
+            nn.Dropout(0.2),
             nn.Linear(2048, 784),
-            nn.Tanh(),
         )
 
         self.discriminator = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
-            nn.LeakyReLU(0.2),
+            nn.LeakyReLU(),
             nn.Dropout(0.2),
             nn.Linear(hidden_dim, hidden_dim),
-            nn.LeakyReLU(0.2),
+            nn.LeakyReLU(),
             nn.Dropout(0.2),
             nn.Linear(hidden_dim, 1),
         )
