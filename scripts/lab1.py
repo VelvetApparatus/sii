@@ -19,7 +19,7 @@ def add_gaussian_noise(x, mean=0.0, std=0.1):
 def train(
         num_epochs: int = 15,
         batch_size: int = 64,
-        data_dir: str = "./data",
+        data_dir: str = "./data/ds",
 ):
     device = get_device()
     model = AutoEncoder(

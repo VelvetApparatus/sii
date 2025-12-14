@@ -132,7 +132,7 @@ def main(gen_model):
             device,
             batch_size,
             150,
-            path="./data"
+            path="./data/ds"
         )
         save_generated_samples(
             model=gen_model,

@@ -1,7 +1,7 @@
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader
 
-def MNIST(path="./data", batch_size=64):
+def MNIST(path="./data/ds", batch_size=64):
     transform = transforms.Compose([
         transforms.ToTensor(),
     ])
