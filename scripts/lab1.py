@@ -7,7 +7,6 @@ from torch import nn
 
 from db.mnist import MNIST
 from models import AutoEncoder
-from tqdm import tqdm
 
 from pkg.device import get_device
 
@@ -124,7 +123,7 @@ def plot_history(history: dict, save_path: str):
 
 def visualize_reconstruction(
         best_model_path: str,
-        data_dir: str = "./data/gen",
+        data_dir: str = "./data/ds",
 ):
     device = get_device()
 
@@ -176,7 +175,7 @@ def visualize_reconstruction(
     plt.axis("off")
 
     plt.tight_layout()
-    plt.show()
+    plt.savefig("./data/plots/ae_reconstruction.png")
 
 if __name__ == "__main__":
     history, best_model_path = train()

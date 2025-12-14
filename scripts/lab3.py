@@ -69,7 +69,7 @@ def train_gan_vae(
             # X
             real_imgs = real_imgs.to(device)
             # D(X)
-            real_labels = model.discriminate(real_imgs)
+            real_labels = model.discriminate(real_imgs).to(device)
             # Lt [true targets]
             true_real_labels = torch.ones(real_imgs.shape[0], 1, device=device)
 
@@ -78,9 +78,9 @@ def train_gan_vae(
             noise = noise.to(device)
 
             # G(Z)
-            fake_imgs = model.generate(noise).detach()
+            fake_imgs = model.generate(noise).to(device).detach()
             # D(G(Z))
-            fake_label = model.discriminate(fake_imgs)
+            fake_label = model.discriminate(fake_imgs).to(device)
             # Lt [true targets]
             true_fake_labels = torch.zeros(fake_imgs.shape[0], 1, device=device)
 
@@ -98,9 +98,9 @@ def train_gan_vae(
             noise = noise.to(device)
 
             # G(z)
-            fake_imgs = model.generate(noise)
+            fake_imgs = model.generate(noise).to(device)
             # D(G(z))
-            fake_labels = model.discriminate(fake_imgs)
+            fake_labels = model.discriminate(fake_imgs).to(device)
             # Lt [true targets]
             fake_targets = torch.ones(fake_imgs.size(0), 1, device=device)
 
