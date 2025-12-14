@@ -1,3 +1,4 @@
+import os
 import random
 
 import torch
@@ -96,8 +97,18 @@ def train(
 
     return history, best_model_path
 
-def plot_history(history: dict):
+
+def plot_history(history: dict, save_path: str):
+    """
+    history: dict с ключами 'train_loss', 'val_loss'
+    save_path: путь к файлу, например './plots/loss.png'
+    """
+
+    # создаём директорию, если её нет
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+
     epochs = range(1, len(history["train_loss"]) + 1)
+
     plt.figure(figsize=(8, 5))
     plt.plot(epochs, history["train_loss"], label="Train loss")
     plt.plot(epochs, history["val_loss"], label="Val loss")
@@ -107,9 +118,14 @@ def plot_history(history: dict):
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
-    plt.show()
 
-def visualize_reconstruction(best_model_path: str, data_dir: str = "./data"):
+    plt.savefig(save_path)
+    plt.close()  # важно: освобождает память
+
+def visualize_reconstruction(
+        best_model_path: str,
+        data_dir: str = "./data/gen",
+):
     device = get_device()
 
     # такая же конфигурация, как в train()
@@ -164,5 +180,5 @@ def visualize_reconstruction(best_model_path: str, data_dir: str = "./data"):
 
 if __name__ == "__main__":
     history, best_model_path = train()
-    plot_history(history)
+    plot_history(history,"./data/plots/autoencoder.png")
     visualize_reconstruction(best_model_path)
