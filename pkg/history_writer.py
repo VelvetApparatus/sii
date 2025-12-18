@@ -23,8 +23,8 @@ class HistoryWriter():
                 v.detach().cpu().item() if torch.is_tensor(v) else float(v)
                 for v in values
             ]
-
-            ax.plot(clean_values)
+            epochs = range(1, len(clean_values) + 1)
+            ax.plot(epochs, clean_values)
             ax.set_xlabel(x_label)
             ax.set_ylabel(key)
             fig.savefig(f"{save_path}_{key}.png")

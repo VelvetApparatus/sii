@@ -9,6 +9,7 @@ from models.autoregression import PixelCNN
 import torch
 
 from pkg.device import get_device
+from pkg.history_writer import HistoryWriter
 
 
 def to_uint8(x):
@@ -32,6 +33,7 @@ def train_pixelcnn(
 ):
     os.makedirs(out_dir, exist_ok=True)
     device = get_device()
+    history = HistoryWriter()
 
     t = Compose([
         ToTensor(),
@@ -51,21 +53,25 @@ def train_pixelcnn(
         model.train()
         total = 0.0
 
-        for x, _ in tqdm(train_loader, desc=f"epoch {ep}"):
+        pbar = tqdm(train_loader, desc=f"epoch {ep}")
+        for x, _ in pbar:
             x = x.to(device)
             loss = pixelcnn_loss(model, x)
+
+            history.save_record(loss.item(), ep)
 
             opt.zero_grad()
             loss.backward()
             opt.step()
 
             total += loss.item() * x.size(0)
-
-        print(f"Epoch {ep}: loss={total / len(train_loader.dataset):.4f}")
+        pbar.set_description(f"Epoch {ep}: loss={total / len(train_loader.dataset):.4f}")
 
         if ep % 5 == 0:
             xs = model.sample(batch_size=16, device=device)  # long 0..255
             xs = (xs.float() / 255.0).clamp(0, 1)
             save_image(xs, os.path.join(out_dir, f"samples_ep{ep:03d}.png"), nrow=4)
 
+
+    history.plot_history("epochs", out_dir)
     return model
