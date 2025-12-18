@@ -51,8 +51,8 @@ def train_pixelcnn(
     train_loader, _ = MNIST()
 
     model = PixelCNN(
-        hidden=128,
-        n_layers=10,
+        hidden=256,
+        n_layers=16,
         n_embeddings=N_BINS,
     ).to(device)
 
