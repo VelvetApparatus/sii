@@ -18,7 +18,7 @@ def to_uint8(x):
 
 
 def pixelcnn_loss(model, x_float):
-    x = to_uint8(x_float)
+    # x = to_uint8(x_float)
     logits = model(x)  # (B,256,H,W)
     # target: (B,H,W)
     target = x[:, 0]
