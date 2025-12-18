@@ -19,7 +19,7 @@ class LinearDense(nn.Module):
         self.out_features = out_features
 
         # weights
-        self.weight = nn.Parameter(torch.empty(in_features, out_features))
+        self.weight = nn.Parameter(torch.empty(out_features, in_features))
 
         # bias
         if bias:
@@ -55,9 +55,9 @@ class LinearDense(nn.Module):
     def forward(self, x):
         y = x.matmul(self.weight.t())
         if self.bias is not None:
-            return y + self.bias
-
+            y = y + self.bias  # broadcasting по последней оси
         return y
+
 
     def extra_repr(self) -> str:
             return f"in_features={self.in_features}, out_features={self.out_features}, bias={self.bias is not None}"

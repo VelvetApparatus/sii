@@ -128,7 +128,7 @@ def visualize_reconstruction(
     device = get_device()
 
     # такая же конфигурация, как в train()
-    model = AutoEncoder(
+    model = AutoEncoderDIY(
         in_channels=1,
         latent_dim=256,
         conv_num=2,
