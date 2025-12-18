@@ -1,210 +1,185 @@
 import math
-import os
 import torch
-from torch import nn
-from torch import amp
-from tqdm import tqdm
-
-# (опционально) для сохранения картинок
-from torchvision.utils import make_grid
-import torchvision.transforms.functional as TF
-from PIL import Image
+import torch.nn as nn
+import torch.nn.functional as F
 
 
-# -------------------------
-# utils
-# -------------------------
-def get(v: torch.Tensor, t: torch.Tensor, x_shape=None):
-    """
-    v: Tensor [T]
-    t: LongTensor [B]
-    return: Tensor [B, 1, 1, 1] (или под x_shape)
-    """
-    out = v.gather(0, t)  # [B]
-    if x_shape is None:
-        return out.view(-1, 1, 1, 1)
-    # подгоняем под размерность x (B, C, H, W) или (B, ...)
-    return out.view((t.shape[0],) + (1,) * (len(x_shape) - 1))
-
-
-class MeanMetric:
-    """Простая замена torchmetrics.MeanMetric."""
-    def __init__(self):
-        self.reset()
-
-    def reset(self):
-        self.sum = 0.0
-        self.count = 0
-
-    def update(self, value: float, n: int = 1):
-        self.sum += float(value) * n
-        self.count += int(n)
-
-    def compute(self):
-        if self.count == 0:
-            return torch.tensor(0.0)
-        return torch.tensor(self.sum / self.count)
-
-
-def default_inverse_transform(x):
-    """
-    Если у тебя нормализация была [-1, 1], то это обратное преобразование в [0, 255].
-    Подстрой под свой пайплайн датасета.
-    """
-    x = (x.clamp(-1, 1) + 1) / 2  # -> [0,1]
-    x = (x * 255.0).round().clamp(0, 255)
-    return x
-
-
-# -------------------------
-# Diffusion
-# -------------------------
-class DiffusionModel(nn.Module):
-    def __init__(self, diffusion_timestamps=1000, img_shape=(1, 28, 28), device="cpu"):
+# --------- Time embedding ---------
+class SinusoidalTimeEmbedding(nn.Module):
+    def __init__(self, dim: int):
         super().__init__()
-        self.diffusion_timestamps = diffusion_timestamps
-        self.img_shape = img_shape
-        self.device = device
+        self.dim = dim
 
-        self.init()  # важно: сразу считаем расписания
+    def forward(self, t: torch.Tensor) -> torch.Tensor:
+        half = self.dim // 2
+        device = t.device
+        t = t.float()
 
-    def init(self):
-        # BETAs & ALPHAs required at different places in the Algorithm.
-        self.beta = self.get_betas()                               # [T]
-        self.alpha = 1.0 - self.beta                               # [T]
+        if half <= 1:
+            # безопасный случай для маленьких dim
+            emb = torch.zeros((t.shape[0], self.dim), device=device, dtype=t.dtype)
+            if self.dim >= 1:
+                emb[:, 0] = t
+            return emb
 
-        self.sqrt_beta = torch.sqrt(self.beta)                     # [T]
-        self.alpha_cumulative = torch.cumprod(self.alpha, dim=0)   # [T]
-        self.sqrt_alpha_cumulative = torch.sqrt(self.alpha_cumulative)
-        self.one_by_sqrt_alpha = 1.0 / torch.sqrt(self.alpha)
-        self.sqrt_one_minus_alpha_cumulative = torch.sqrt(1.0 - self.alpha_cumulative)
+        freqs = torch.exp(
+            -math.log(10000.0) * torch.arange(0, half, device=device).float() / (half - 1)
+        )  # (half,)
+        args = t[:, None] * freqs[None, :]  # (B, half)
 
-    def get_betas(self):
-        """linear schedule, proposed in original ddpm paper"""
-        # у тебя было self.num_diffusion_timesteps -> должно быть self.diffusion_timestamps
-        scale = 1000 / self.diffusion_timestamps
-        beta_start = scale * 1e-4
-        beta_end = scale * 0.02
-        return torch.linspace(
-            beta_start,
-            beta_end,
-            self.diffusion_timestamps,
-            dtype=torch.float32,
-            device=self.device,
+        emb = torch.cat([torch.sin(args), torch.cos(args)], dim=-1)  # (B, 2*half)
+        if self.dim % 2 == 1:
+            emb = F.pad(emb, (0, 1))
+        return emb
+
+
+# --------- Blocks ---------
+def norm(num_channels: int) -> nn.GroupNorm:
+    # GroupNorm требует num_channels % groups == 0
+    g = min(32, num_channels)
+    while num_channels % g != 0:
+        g -= 1
+    return nn.GroupNorm(g, num_channels)
+
+
+class ResBlock(nn.Module):
+    def __init__(self, in_ch: int, out_ch: int, time_emb_dim: int, dropout: float = 0.0):
+        super().__init__()
+        self.in_ch = in_ch
+        self.out_ch = out_ch
+
+        self.norm1 = norm(in_ch)
+        self.conv1 = nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1)
+
+        self.time_proj = nn.Linear(time_emb_dim, out_ch)
+
+        self.norm2 = norm(out_ch)
+        self.dropout = nn.Dropout(dropout)
+        self.conv2 = nn.Conv2d(out_ch, out_ch, kernel_size=3, padding=1)
+
+        self.skip = nn.Identity() if in_ch == out_ch else nn.Conv2d(in_ch, out_ch, 1)
+
+    def forward(self, x: torch.Tensor, t_emb: torch.Tensor) -> torch.Tensor:
+        h = self.conv1(F.silu(self.norm1(x)))
+        t_add = self.time_proj(F.silu(t_emb))[:, :, None, None]
+        h = h + t_add
+        h = self.conv2(self.dropout(F.silu(self.norm2(h))))
+        return h + self.skip(x)
+
+
+class Downsample(nn.Module):
+    def __init__(self, ch: int):
+        super().__init__()
+        self.conv = nn.Conv2d(ch, ch, kernel_size=3, stride=2, padding=1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.conv(x)
+
+
+class Upsample(nn.Module):
+    def __init__(self, ch: int):
+        super().__init__()
+        self.conv = nn.Conv2d(ch, ch, kernel_size=3, padding=1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = F.interpolate(x, scale_factor=2.0, mode="nearest")
+        return self.conv(x)
+
+
+# --------- UNet ---------
+class UNetDDPM(nn.Module):
+    def __init__(
+        self,
+        in_channels: int = 3,
+        out_channels: int = 3,
+        base_channels: int = 64,
+        channel_mults=(1, 2, 4, 8),
+        num_res_blocks: int = 2,
+        time_emb_dim: int = 256,
+        dropout: float = 0.0,
+    ):
+        super().__init__()
+
+        self.time_embed = nn.Sequential(
+            SinusoidalTimeEmbedding(time_emb_dim),
+            nn.Linear(time_emb_dim, time_emb_dim * 4),
+            nn.SiLU(),
+            nn.Linear(time_emb_dim * 4, time_emb_dim),
         )
 
-    def forward_diffusion(self, x0: torch.Tensor, timesteps: torch.Tensor):
-        """
-        q(x_t|x_0) = sqrt(alpha_bar_t)*x0 + sqrt(1-alpha_bar_t)*eps
-        """
-        eps = torch.randn_like(x0)
-        mean = get(self.sqrt_alpha_cumulative, t=timesteps, x_shape=x0.shape) * x0
-        std = get(self.sqrt_one_minus_alpha_cumulative, t=timesteps, x_shape=x0.shape)
-        xt = mean + std * eps
-        return xt, eps
+        self.in_conv = nn.Conv2d(in_channels, base_channels, kernel_size=3, padding=1)
 
+        # ---- Down path (по уровням) ----
+        self.down_levels = nn.ModuleList()
+        ch = base_channels
 
-# -------------------------
-# train
-# -------------------------
-def train_one_epoch(
-    model,
-    loader,
-    sd: DiffusionModel,
-    optimizer,
-    scaler,
-    loss_fn,
-    device,
-    epoch=1,
-    num_epochs=1,
-    timesteps=1000,
-):
-    loss_record = MeanMetric()
-    model.train()
+        for i, mult in enumerate(channel_mults):
+            out_ch = base_channels * mult
 
-    # amp.autocast: корректно через device_type
-    device_type = "cuda" if str(device).startswith("cuda") else "cpu"
+            blocks = nn.ModuleList()
+            for _ in range(num_res_blocks):
+                blocks.append(ResBlock(ch, out_ch, time_emb_dim, dropout))
+                ch = out_ch
 
-    with tqdm(total=len(loader), dynamic_ncols=True) as tq:
-        tq.set_description(f"Train :: Epoch: {epoch}/{num_epochs}")
+            downsample = Downsample(ch) if i != len(channel_mults) - 1 else None
+            self.down_levels.append(nn.ModuleDict({"blocks": blocks, "down": downsample}))
 
-        for x0s, _ in loader:
-            tq.update(1)
+        # ---- Middle ----
+        self.mid1 = ResBlock(ch, ch, time_emb_dim, dropout)
+        self.mid2 = ResBlock(ch, ch, time_emb_dim, dropout)
 
-            x0s = x0s.to(device)
-            # t обычно берут [0..T-1] или [1..T-1]; ниже оставим [1..T-1], как у тебя
-            ts = torch.randint(low=1, high=timesteps, size=(x0s.shape[0],), device=device)
+        # ---- Up path (зеркало down) ----
+        self.up_levels = nn.ModuleList()
+        # важно: идём по уровням в обратном порядке
+        for i, mult in reversed(list(enumerate(channel_mults))):
+            out_ch = base_channels * mult
 
-            xts, gt_noise = sd.forward_diffusion(x0s, ts)
+            upsample = Upsample(ch) if i != len(channel_mults) - 1 else None
 
-            with amp.autocast(device_type=device_type):
-                pred_noise = model(xts, ts)
-                loss = loss_fn(pred_noise, gt_noise)
+            blocks = nn.ModuleList()
+            for _ in range(num_res_blocks):
+                # сюда будем конкатить skip с таким же out_ch, поэтому in = ch + out_ch
+                blocks.append(ResBlock(ch + out_ch, out_ch, time_emb_dim, dropout))
+                ch = out_ch
 
-            optimizer.zero_grad(set_to_none=True)
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
+            self.up_levels.append(nn.ModuleDict({"up": upsample, "blocks": blocks}))
 
-            loss_value = float(loss.detach().item())
-            loss_record.update(loss_value, n=x0s.shape[0])
-            tq.set_postfix_str(s=f"Loss: {loss_value:.4f}")
+        self.out_norm = norm(ch)
+        self.out_conv = nn.Conv2d(ch, out_channels, kernel_size=3, padding=1)
 
-        mean_loss = float(loss_record.compute().item())
-        tq.set_postfix_str(s=f"Epoch Loss: {mean_loss:.4f}")
+    def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        t_emb = self.time_embed(t)
+        h = self.in_conv(x)
 
-    return mean_loss
+        skips = []
 
+        # Down: сохраняем skip только после ResBlock
+        for level in self.down_levels:
+            for block in level["blocks"]:
+                h = block(h, t_emb)
+                skips.append(h)
+            if level["down"] is not None:
+                h = level["down"](h)
 
-# -------------------------
-# sampling (reverse diffusion)
-# -------------------------
-@torch.no_grad()
-def reverse_diffusion(
-    model,
-    sd: DiffusionModel,
-    timesteps=1000,
-    img_shape=(1, 28, 28),
-    num_images=16,
-    nrow=8,
-    device="cpu",
-    save_path="sample.png",
-    inverse_transform=default_inverse_transform,
-):
-    x = torch.randn((num_images, *img_shape), device=device)
-    model.eval()
+        # Middle
+        h = self.mid1(h, t_emb)
+        h = self.mid2(h, t_emb)
 
-    for time_step in tqdm(
-        iterable=reversed(range(1, timesteps)),
-        total=timesteps - 1,
-        dynamic_ncols=True,
-        desc="Sampling :: ",
-        position=0,
-    ):
-        ts = torch.full((num_images,), time_step, dtype=torch.long, device=device)
-        z = torch.randn_like(x) if time_step > 1 else torch.zeros_like(x)
+        # Up: на уровне (если надо) upsample, затем (concat + ResBlock)×N
+        for level in self.up_levels:
+            if level["up"] is not None:
+                h = level["up"](h)
 
-        predicted_noise = model(x, ts)
+            for block in level["blocks"]:
+                s = skips.pop()
 
-        beta_t = get(sd.beta, ts, x_shape=x.shape)
-        one_by_sqrt_alpha_t = get(sd.one_by_sqrt_alpha, ts, x_shape=x.shape)
-        sqrt_one_minus_alpha_cum_t = get(sd.sqrt_one_minus_alpha_cumulative, ts, x_shape=x.shape)
+                # страховка по spatial (на случай нечётных H/W)
+                if h.shape[-2:] != s.shape[-2:]:
+                    # лучше подгонять h под s (или наоборот) — главное одинаково
+                    h = F.interpolate(h, size=s.shape[-2:], mode="nearest")
 
-        x = one_by_sqrt_alpha_t * (x - (beta_t / sqrt_one_minus_alpha_cum_t) * predicted_noise) + torch.sqrt(beta_t) * z
+                h = torch.cat([h, s], dim=1)
+                h = block(h, t_emb)
 
-    # save result
-    x_img = inverse_transform(x).to(torch.uint8)
-    grid = make_grid(x_img, nrow=nrow, pad_value=255.0)
-    pil_image = TF.to_pil_image(grid.cpu())
-
-    os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
-    pil_image.save(save_path)
-    return pil_image
-
-
-# -------------------------
-# example scaler
-# -------------------------
-def make_grad_scaler(device):
-    # Для CPU scaler обычно не нужен, но пусть будет единообразно
-    return amp.GradScaler(enabled=str(device).startswith("cuda"))
+        h = self.out_conv(F.silu(self.out_norm(h)))
+        return h
