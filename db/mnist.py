@@ -1,10 +1,16 @@
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader
 
-def MNIST(path="./data/ds", batch_size=64):
-    transform = transforms.Compose([
-        transforms.ToTensor(),
-    ])
+
+def MNIST(
+        path="./data/ds",
+        batch_size=64,
+        transform: transforms.Compose = None,
+):
+    if transform is None:
+        transform = transforms.Compose([
+            transforms.ToTensor(),
+        ])
 
     # Загружаем датасеты
     train_dataset = datasets.MNIST(
