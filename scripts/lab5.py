@@ -1,6 +1,5 @@
 import os
 import torch.nn.functional as F
-from torchvision.transforms import Compose, ToTensor, Lambda
 from tqdm import tqdm
 from torchvision.utils import save_image
 
@@ -44,10 +43,6 @@ def train_pixelcnn(
     device = get_device()
     history = HistoryWriter()
 
-    # t = Compose([
-        # ToTensor(),
-        # Lambda(lambda x: to_uint8(x)),
-    # ])
     train_loader, _ = MNIST()
 
     model = PixelCNN(
