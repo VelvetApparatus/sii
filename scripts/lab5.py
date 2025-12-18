@@ -18,7 +18,7 @@ def to_uint8(x):
     return xq
 
 
-def pixelcnn_loss(model, x_float):
+def pixelcnn_loss(model, x):
     # x = to_uint8(x_float)
     logits = model(x)  # (B,256,H,W)
     # target: (B,H,W)
@@ -42,12 +42,12 @@ def train_pixelcnn(
     train_loader, _ = MNIST(transform=t)
 
     model = PixelCNN(
-        hidden=64,
-        n_layers=7,
+        hidden=128,
+        n_layers=10,
         n_embeddings=256,
     ).to(device)
 
-    opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+    opt = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=1e-4)
 
     for ep in range(1, epochs + 1):
         model.train()
@@ -58,14 +58,14 @@ def train_pixelcnn(
             x = x.to(device)
             loss = pixelcnn_loss(model, x)
 
-            history.save_record(loss.item(), ep)
+            history.save_record("loss", loss.item())
 
             opt.zero_grad()
             loss.backward()
             opt.step()
 
             total += loss.item() * x.size(0)
-        pbar.set_description(f"Epoch {ep}: loss={total / len(train_loader.dataset):.4f}")
+            pbar.set_description(f"Epoch {ep}: loss={total / len(train_loader.dataset):.4f}")
 
         if ep % 5 == 0:
             xs = model.sample(batch_size=16, device=device)  # long 0..255
@@ -73,5 +73,9 @@ def train_pixelcnn(
             save_image(xs, os.path.join(out_dir, f"samples_ep{ep:03d}.png"), nrow=4)
 
 
-    history.plot_history("epochs", out_dir)
+    history.plot_history("epochs", "./data/plots/autoencoder.png")
     return model
+
+
+if __name__ == "__main__":
+    train_pixelcnn(35)
